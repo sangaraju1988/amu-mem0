@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amu-mem0"
+version = "0.1.0"
+description = "Derivation-gated reads for mem0: a memory is returned only if the requester is entitled to every source it was derived from."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Venkata Sangaraju" }]
+keywords = ["mem0", "agent-memory", "access-control", "data-lineage", "privacy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "amu-governance>=0.1.2,<0.2",
+    "mem0ai>=2.2,<3",
+]
+
+[project.urls]
+Paper = "https://doi.org/10.1109/ACCESS.2026.3730363"
+"amu-governance" = "https://github.com/sangaraju1988/amu-governance"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amu_mem0"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
