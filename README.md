@@ -101,41 +101,70 @@ default policy.
 
 ## Benchmark
 
-`make bench` runs a synthetic, deterministic benchmark (fixed seed, offline
-embedder, local Qdrant, no LLM). Two teams share one mem0 scope containing
-420 memories: 180 raw records and 240 agent-written summaries, aggregates and
-2- and 3-hop summaries. The benchmark measures 240 queries at `top_k=10`.
-Full results, versions and the commit hash are in
+> **Synthetic multi-team setup, deterministic embedder, 420 memories.** These
+> results describe this benchmark only. They are not estimates of leak rates in
+> production.
+
+`make bench` runs a deterministic benchmark: fixed seed, offline hashed
+bag-of-words embedder, local Qdrant, no LLM. Two teams share one mem0 scope
+containing 420 memories: 180 raw records and 240 agent-written summaries,
+aggregates, and 2- and 3-hop summaries. It runs 240 queries at `top_k=10`.
+Full results, definitions, versions and the commit hash are in
 [`results/BENCH.md`](results/BENCH.md).
 
-Run at commit `99dd6d5`, 2026-11-15:
+Run at commit `ac67960`, 2026-11-15 (synthetic multi-team setup, deterministic
+embedder, 420 memories):
 
-| Condition | Leak rate (returned items) | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
-|---|---|---|---|---|
-| Plain mem0 | 35.7% (857 / 2400) | 71.2% | 0.650 | 2.05 / 2.11 |
-| Content-only filter (each memory's own labels) | 23.5% (563 / 2400) | 62.9% | 0.816 | 2.92 / 3.00 |
-| amu-mem0 gate | 0.0% (0 / 2164) | 0.0% | 0.999 | 3.06 / 12.63 |
+| Condition | Leaked / returned | Leak rate | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
+|---|---|---|---|---|---|
+| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.04 / 2.16 |
+| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.91 / 3.06 |
+| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.06 / 12.61 |
 
-How to read it:
-- **Content-only removes raw restricted records but not what was derived
-  from them.** All 563 of its leaks are derived memories.
-- **The gate returns fewer than 10 results only when fewer than 10 entitled
-  memories pass mem0's own score threshold** for that query (2164 of 2400 slots).
-  Recall is measured against an oracle: mem0's ranking filtered by the true
-  entitlements.
-- **The p95 cost comes from over-fetching** when most top candidates are
-  restricted, e.g. Marketing searching Finance topics.
-- **Comparison with the paper.** The content-only leak rate lands inside the
+- **Content-only filtering misses derived memories.** It removes raw restricted
+  records, but none of what was derived from them: all 563 of its leaks are
+  derived memories.
+- **Recall@10, exactly.** For each query, mem0 is searched with `top_k=500` and
+  the results are kept, in mem0's order, only if the requester is truly entitled
+  to them. The first min(10, n) of those form the ideal set. A returned memory is
+  a hit if it is in that entitled list with a score, in the same `top_k=500`
+  call, at least that of the 10th ideal item, so ties at rank 10 are not
+  penalised. Recall@10 = min(hits, |ideal|) / |ideal|, averaged over all 240
+  queries (every query has at least one entitled memory).
+- **Plain mem0's lower recall is displacement.** It always returns 10 results,
+  and restricted memories take slots entitled ones would otherwise fill. In 170
+  of the 171 queries where it misses entitled memories, every miss is matched by
+  a restricted memory in its top 10. The remainder reflects mem0's ranking
+  depending on `top_k`.
+- **The denominators differ: 2,164 vs 2,400.** The gate returns fewer than 10
+  results in 34 queries (236 empty slots). In all 34 it returned every entitled
+  memory mem0 surfaces for that query at any depth, because fewer than 10
+  entitled memories pass mem0's own score threshold. Leak rates are per returned
+  item, so each uses its own denominator.
+- **Latency is tail overhead from over-fetch, at small scale.** When most top
+  candidates are restricted, the gate issues several underlying searches. That
+  shows up in p95, not p50. These are in-process timings on 420 memories with
+  local Qdrant. Latency was not measured at production scale, with a remote
+  vector store, or with real embeddings.
+- **Comparison with the paper.** The content-only leak rate falls inside the
   paper's 18.8–25.5% range for naive memory. That is not a replication: the
   workload, store and leak definition all differ.
 
-The lineage-coverage sweep differs from the paper's degradation result. Here,
-leakage is not eliminated at 90% coverage (1.4% of returned items leak). The
-paper measured 0% at 75–90% completeness. The setups differ: the paper drops
-columns within each step of a flat cached result, while this benchmark drops
-whole `derived_from` edges in a multi-hop graph. A missing edge hides every label
-beneath it from all descendants. The paper notes that join depth raises the
-completeness requirement, and multi-hop agent memory is that case.
+**Lineage coverage sweep (gate only; synthetic multi-team setup, deterministic
+embedder, 420 memories).** Each `derived_from` edge is recorded with
+probability c, and dropped edges are silent.
+
+| Derivation edges recorded | Queries with a leak | Leak rate | Recall@10 |
+|---|---|---|---|
+| 100% | 0.0% | 0.0% | 0.999 |
+| 90.2% | 11.7% | 1.4% | 0.995 |
+| 75.9% | 22.9% | 4.8% | 0.983 |
+| 49.9% | 35.4% | 11.2% | 0.949 |
+
+The paper recommends at least 90% lineage completeness, based on 0% measured
+leakage at 75–90% on its workloads. This workload is different: it drops whole
+derivation edges in a multi-hop graph, where the paper dropped columns within a
+flat result. Here some leakage remains at every coverage level below 100%.
 
 ## Threat model
 
@@ -160,10 +189,11 @@ entitlements and to declare lineage truthfully.
 
 - **Zero leakage depends on lineage coverage.** The guarantee holds only if
   every derivation is declared. An undeclared edge is invisible to the gate.
-  In the benchmark, recording 90% of derivation edges still leaked 1.4% of
-  returned items. The paper recommends at least 90% lineage completeness, and
-  notes that deeper derivations raise the requirement. Multi-hop agent memory is
-  exactly that case. See the coverage sweep in `results/BENCH.md`.
+  In the synthetic benchmark, with 90% of derivation edges recorded, 11.7% of
+  queries still returned at least one leaked memory. The paper recommends at
+  least 90% lineage completeness, and notes that deeper derivations raise the
+  requirement. Multi-hop agent memory is exactly that case. See the coverage
+  sweep in `results/BENCH.md`.
 - **Derived-feature inference remains open.** A memory whose text paraphrases
   restricted data without a declared source is not caught.
 - **`infer=True` is unsupported** for gated data (see above).
@@ -173,7 +203,8 @@ entitlements and to declare lineage truthfully.
   the child is written. Changing a parent's lineage later does not update its
   children. Deleting a parent leaves children with their recorded closure.
 - **Search cost grows with filtering.** When most top candidates are denied,
-  the gate issues several underlying searches (see p95 in the benchmark).
+  the gate issues several underlying searches. This was measured only as
+  small-scale tail overhead (p95 in the benchmark), not at production scale.
 - Tested against mem0ai 2.2.1 with local Qdrant. Other vector stores are
   expected to work because only metadata round-tripping is required, but they
   are untested.
