@@ -16,7 +16,7 @@ All times UTC. Each entry links to a public, timestamped record.
 
 ## Status
 
-- mem0ai/mem0#7927: open, no maintainer response or label yet (checked 2026-11-15).
+- mem0ai/mem0#7927: open, labelled `sdk-python` by triage, no comments yet (checked 2026-11-15T05:20Z); not yet labelled `accepted`.
 
 ## Benchmark
 
