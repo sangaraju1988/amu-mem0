@@ -190,6 +190,45 @@ def test_underlying_calls_are_bounded(memory):
     assert calls == [10, 20, 40]  # doubles until max_fetch, then stops
 
 
+def test_short_page_from_mem0_does_not_end_over_fetch(memory):
+    # mem0 may return fewer than top_k results while more exist at a larger top_k
+    # (score threshold + top_k-sized candidate pool). Simulate a short first page.
+    real_search = memory.search
+    calls = []
+
+    def short_first_page(*a, **kw):
+        calls.append(kw["top_k"])
+        out = real_search(*a, **kw)
+        if len(calls) == 1:
+            out["results"] = out["results"][: kw["top_k"] - 1]
+        return out
+
+    memory.search = short_first_page
+    gm = GatedMemory(memory, fetch_multiplier=1, max_fetch=64)
+    for i in range(10):
+        add_id(gm, f"payroll payroll record {i}", sources={"hris": ["hr.salary"]})
+    public = {add_id(gm, f"payroll faq {i}", sources={"wiki": []}) for i in range(3)}
+    res = gm.search("payroll payroll", filters=SCOPE, entitlements=MKT, top_k=3)
+    assert set(ids(res)) == public
+    assert len(calls) > 1
+
+
+def test_over_fetch_stops_when_no_new_candidates(memory):
+    calls = []
+    real_search = memory.search
+
+    def counting_search(*a, **kw):
+        calls.append(kw["top_k"])
+        return real_search(*a, **kw)
+
+    memory.search = counting_search
+    gm = GatedMemory(memory, fetch_multiplier=1, max_fetch=1000)
+    for i in range(6):
+        add_id(gm, f"payroll record {i}", sources={"hris": ["hr.salary"]})
+    gm.search("payroll", filters=SCOPE, entitlements=MKT, top_k=5)
+    assert calls == [5, 10, 20]  # 5 -> 6 -> 6 results: stalled, stop well before max_fetch
+
+
 def test_denial_log_has_no_memory_content(gm, caplog):
     add_id(gm, "the secret number is 4815162342", sources={"hris": ["hr.salary"]})
     with caplog.at_level(logging.INFO, logger="amu_mem0"):

@@ -230,6 +230,7 @@ class GatedMemory:
     def _gated_fetch(self, op: str, fetch_fn: Any, top_k: int, entitlements: Iterable[str]) -> dict[str, Any]:
         ents = frozenset(entitlements)
         fetch = min(max(top_k * self.fetch_multiplier, top_k), self.max_fetch)
+        prev_len = -1
         while True:
             raw = fetch_fn(fetch)["results"]
             allowed: list[dict[str, Any]] = []
@@ -240,9 +241,13 @@ class GatedMemory:
                     allowed.append(item)
                 else:
                     denied.append(d)
-            exhausted = len(raw) < fetch
-            if len(allowed) >= top_k or exhausted or fetch >= self.max_fetch:
+            # mem0 can return fewer than ``fetch`` results even when more exist: it applies a
+            # score threshold and sizes its candidate pool from top_k. So "fewer than asked"
+            # does not mean exhausted; stop only when a larger fetch adds no new candidates.
+            stalled = len(raw) == prev_len
+            if len(allowed) >= top_k or stalled or fetch >= self.max_fetch:
                 break
+            prev_len = len(raw)
             fetch = min(fetch * 2, self.max_fetch)
         for d in denied:
             self._log_denial(op, d)
