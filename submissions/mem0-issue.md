@@ -1,4 +1,4 @@
-# Draft: mem0 feature request (NOT POSTED)
+# mem0 feature request (posted as mem0ai/mem0#7927, 2026-11-15T04:54:56Z)
 
 Target: https://github.com/mem0ai/mem0/issues/new?template=feature_request.yml
 
@@ -58,6 +58,6 @@ One question: would you like this linked from the docs (I'd write the page), or 
 
 A store-side hook (#7870) or typed provenance (#7782) would let a check like this sit closer to the store. This doesn't depend on either.
 
-Disclosure: I co-authored the paper this rule comes from (Sangaraju & Vissa, IEEE Access 2026, doi:10.1109/ACCESS.2026.3730363) and wrote amu-mem0. AI-assisted (Claude Code); I designed the approach, reviewed all code, and ran the benchmark myself.
+Disclosure: I co-authored the paper this rule comes from (Sangaraju & Vissa, IEEE Access 2026, doi:10.1109/ACCESS.2026.3730363) and wrote amu-mem0. AI-assisted (Claude Code); I designed the approach and reviewed all code and the benchmark.
 
 Code and benchmark: https://github.com/sangaraju1988/amu-mem0

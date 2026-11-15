@@ -209,6 +209,12 @@ entitlements and to declare lineage truthfully.
   expected to work because only metadata round-tripping is required, but they
   are untested.
 
+## Upstream discussion
+
+The behaviour this package addresses is described for mem0's maintainers in
+[mem0ai/mem0#7927](https://github.com/mem0ai/mem0/issues/7927). The issue
+proposes no change to mem0's core; it asks whether a docs link would be welcome.
+
 ## Development
 
 ```bash
