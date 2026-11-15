@@ -19,7 +19,7 @@ its derivation and `P(d)` is the set of labels the requester holds. The decision
 ## Install
 
 ```bash
-pip install amu-mem0        # not yet published; for now: pip install -e .
+pip install amu-mem0
 ```
 
 Requires Python 3.10+, `mem0ai>=2.2,<3`, `amu-governance>=0.1.2,<0.2`. No other

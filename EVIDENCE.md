@@ -10,9 +10,13 @@ All times UTC. Each entry links to a public, timestamped record.
 | 2026-11-15T04:04:45Z | CI green on Python 3.10–3.13 | https://github.com/sangaraju1988/amu-mem0/actions/runs/43675135907 |
 | 2026-11-15T04:53:37Z | Publish workflow pushed (commit `1a2d9ed`), CI green | https://github.com/sangaraju1988/amu-mem0/commit/1a2d9ed |
 | 2026-11-15T04:54:56Z | Feature request opened on mem0 | https://github.com/mem0ai/mem0/issues/7927 |
-| pending | TestPyPI upload | |
-| pending | v0.1.0 tag and GitHub Release | |
-| pending | PyPI release | https://pypi.org/project/amu-mem0/ |
+| 2026-11-15T05:14:17Z | TestPyPI upload of 0.1.0; verified by clean install + quickstart | https://test.pypi.org/project/amu-mem0/0.1.0/ (run https://github.com/sangaraju1988/amu-mem0/actions/runs/43680148939) |
+| 2026-11-15T05:16:22Z | Tag `v0.1.0` (commit `e33911d`) and GitHub Release | https://github.com/sangaraju1988/amu-mem0/releases/tag/v0.1.0 |
+| 2026-11-15T05:16:43Z | PyPI release 0.1.0 (wheel + sdist); verified by clean install + quickstart | https://pypi.org/project/amu-mem0/0.1.0/ (run https://github.com/sangaraju1988/amu-mem0/actions/runs/43680359990) |
+
+## Status
+
+- mem0ai/mem0#7927: open, no maintainer response or label yet (checked 2026-11-15).
 
 ## Benchmark
 
