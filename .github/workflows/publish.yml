@@ -1,0 +1,41 @@
+name: Publish
+
+# Trusted publishing (OIDC): no API token is stored in this repo.
+# One-time setup on each index: add a pending trusted publisher for
+# repo sangaraju1988/amu-mem0, workflow publish.yml, and the environment
+# named below (testpypi on test.pypi.org, pypi on pypi.org).
+#
+#   TestPyPI: run manually (Actions > Publish > Run workflow).
+#   PyPI:     runs only when a GitHub Release is published.
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
