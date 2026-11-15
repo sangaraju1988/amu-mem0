@@ -1,0 +1,152 @@
+{
+  "meta": {
+    "by_kind": {
+      "aggregate": 60,
+      "hop2": 40,
+      "hop3": 20,
+      "raw": 180,
+      "summary": 120
+    },
+    "commit": "99dd6d5afeaf",
+    "dirty": false,
+    "memories": 420,
+    "platform": "Darwin arm64",
+    "python": "3.12.14",
+    "queries": 240,
+    "restricted_derived": 166,
+    "seed": 20261115,
+    "spacy_installed": false,
+    "top_k": 10,
+    "utc": "2026-11-15T03:32:46Z",
+    "versions": {
+      "amu-governance": "0.1.2",
+      "amu-mem0": "0.1.0",
+      "mem0ai": "2.2.1",
+      "qdrant-client": "1.20.0"
+    }
+  },
+  "results": {
+    "0.5": {
+      "metrics": {
+        "content_only": {
+          "leak_rate": 0.23208333333333334,
+          "leaked": 557,
+          "leaked_derived": 557,
+          "queries_with_leak": 0.6208333333333333,
+          "recall_at_k": 0.8174305555555555,
+          "returned": 2400
+        },
+        "gate": {
+          "leak_rate": 0.11163793103448276,
+          "leaked": 259,
+          "leaked_derived": 259,
+          "queries_with_leak": 0.3541666666666667,
+          "recall_at_k": 0.949375,
+          "returned": 2320
+        },
+        "plain": {
+          "leak_rate": 0.3545833333333333,
+          "leaked": 851,
+          "leaked_derived": 332,
+          "queries_with_leak": 0.7083333333333334,
+          "recall_at_k": 0.6557638888888889,
+          "returned": 2400
+        }
+      },
+      "realized_edge_coverage": 0.4990791896869245
+    },
+    "0.75": {
+      "metrics": {
+        "content_only": {
+          "leak_rate": 0.23375,
+          "leaked": 561,
+          "leaked_derived": 561,
+          "queries_with_leak": 0.6291666666666667,
+          "recall_at_k": 0.8207638888888888,
+          "returned": 2400
+        },
+        "gate": {
+          "leak_rate": 0.04753363228699552,
+          "leaked": 106,
+          "leaked_derived": 106,
+          "queries_with_leak": 0.22916666666666666,
+          "recall_at_k": 0.9829166666666667,
+          "returned": 2230
+        },
+        "plain": {
+          "leak_rate": 0.355,
+          "leaked": 852,
+          "leaked_derived": 332,
+          "queries_with_leak": 0.7,
+          "recall_at_k": 0.6522222222222223,
+          "returned": 2400
+        }
+      },
+      "realized_edge_coverage": 0.7587476979742173
+    },
+    "0.9": {
+      "metrics": {
+        "content_only": {
+          "leak_rate": 0.23458333333333334,
+          "leaked": 563,
+          "leaked_derived": 563,
+          "queries_with_leak": 0.6291666666666667,
+          "recall_at_k": 0.8164583333333334,
+          "returned": 2400
+        },
+        "gate": {
+          "leak_rate": 0.013736263736263736,
+          "leaked": 30,
+          "leaked_derived": 30,
+          "queries_with_leak": 0.11666666666666667,
+          "recall_at_k": 0.995,
+          "returned": 2184
+        },
+        "plain": {
+          "leak_rate": 0.3570833333333333,
+          "leaked": 857,
+          "leaked_derived": 328,
+          "queries_with_leak": 0.7125,
+          "recall_at_k": 0.6501388888888889,
+          "returned": 2400
+        }
+      },
+      "realized_edge_coverage": 0.9023941068139963
+    },
+    "1.0": {
+      "metrics": {
+        "content_only": {
+          "leak_rate": 0.23458333333333334,
+          "leaked": 563,
+          "leaked_derived": 563,
+          "p50_ms": 2.9156255768612027,
+          "p95_ms": 3.0023748986423016,
+          "queries_with_leak": 0.6291666666666667,
+          "recall_at_k": 0.8164583333333334,
+          "returned": 2400
+        },
+        "gate": {
+          "leak_rate": 0.0,
+          "leaked": 0,
+          "leaked_derived": 0,
+          "p50_ms": 3.0630409019067883,
+          "p95_ms": 12.630457989871502,
+          "queries_with_leak": 0.0,
+          "recall_at_k": 0.9991666666666666,
+          "returned": 2164
+        },
+        "plain": {
+          "leak_rate": 0.3570833333333333,
+          "leaked": 857,
+          "leaked_derived": 328,
+          "p50_ms": 2.0546874729916453,
+          "p95_ms": 2.1073329262435436,
+          "queries_with_leak": 0.7125,
+          "recall_at_k": 0.6501388888888889,
+          "returned": 2400
+        }
+      },
+      "realized_edge_coverage": 1.0
+    }
+  }
+}

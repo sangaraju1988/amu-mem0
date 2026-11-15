@@ -108,7 +108,34 @@ embedder, local Qdrant, no LLM). Two teams share one mem0 scope containing
 Full results, versions and the commit hash are in
 [`results/BENCH.md`](results/BENCH.md).
 
-<!-- BENCH-TABLE -->
+Run at commit `99dd6d5`, 2026-11-15:
+
+| Condition | Leak rate (returned items) | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
+|---|---|---|---|---|
+| Plain mem0 | 35.7% (857 / 2400) | 71.2% | 0.650 | 2.05 / 2.11 |
+| Content-only filter (each memory's own labels) | 23.5% (563 / 2400) | 62.9% | 0.816 | 2.92 / 3.00 |
+| amu-mem0 gate | 0.0% (0 / 2164) | 0.0% | 0.999 | 3.06 / 12.63 |
+
+How to read it:
+- **Content-only removes raw restricted records but not what was derived
+  from them.** All 563 of its leaks are derived memories.
+- **The gate returns fewer than 10 results only when fewer than 10 entitled
+  memories pass mem0's own score threshold** for that query (2164 of 2400 slots).
+  Recall is measured against an oracle: mem0's ranking filtered by the true
+  entitlements.
+- **The p95 cost comes from over-fetching** when most top candidates are
+  restricted, e.g. Marketing searching Finance topics.
+- **Comparison with the paper.** The content-only leak rate lands inside the
+  paper's 18.8–25.5% range for naive memory. That is not a replication: the
+  workload, store and leak definition all differ.
+
+The lineage-coverage sweep differs from the paper's degradation result. Here,
+leakage is not eliminated at 90% coverage (1.4% of returned items leak). The
+paper measured 0% at 75–90% completeness. The setups differ: the paper drops
+columns within each step of a flat cached result, while this benchmark drops
+whole `derived_from` edges in a multi-hop graph. A missing edge hides every label
+beneath it from all descendants. The paper notes that join depth raises the
+completeness requirement, and multi-hop agent memory is that case.
 
 ## Threat model
 
