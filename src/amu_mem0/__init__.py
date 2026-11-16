@@ -20,7 +20,7 @@ from .gate import (
 )
 from .lineage import METADATA_KEY, LineageRecord, MalformedLineageError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "GatedMemory",

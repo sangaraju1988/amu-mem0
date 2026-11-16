@@ -85,6 +85,7 @@ finance sees: ['Payroll cost grew 8% QoQ', 'Q3 payroll total is 4.2M']
 |---|---|---|
 | Memory has no `amu` metadata (e.g. written with plain mem0) | denied | `missing_lineage` |
 | `add()` with neither `sources` nor `derived_from` | stored, then denied | `incomplete_lineage` |
+| `update()` replaces the text without declaring `sources` or `derived_from` | stored, then denied | `incomplete_lineage` |
 | A `derived_from` id is missing, or the parent has no or incomplete lineage | stored, then denied | `incomplete_lineage` |
 | `amu` metadata is malformed | denied | `malformed_lineage` |
 | `add(infer=True)` | raises `InferNotAllowedError` | n/a |
@@ -99,6 +100,51 @@ them, and the caller cannot declare which. With `GatedMemory(allow_infer=True)`
 such memories are stored but marked incomplete, so they stay hidden under the
 default policy.
 
+### Updates and source restrictions (0.2.0)
+
+**`update(memory_id, text=None, *, sources=None, derived_from=None, metadata=None, **kwargs)`**
+rewrites a memory through mem0's `update()` and recomputes its lineage in the
+same call. Lineage only grows: the new record is the existing sources, parents
+and closure **unioned** with what you declare. An update can therefore never
+lower a memory's restrictions.
+
+```python
+mid = memory.add("Office closed Friday", agent_id="analyst", sources={"intranet": []})["results"][0]["id"]
+memory.update(mid, "Q3 payroll total is 4.2M", sources={"hris": ["hr.salary"]})
+memory.get(mid, entitlements={"mkt.campaign"})  # None: the rewrite carries hr.salary now
+```
+
+Replacing the text without declaring where it came from marks the lineage
+incomplete, so the memory is hidden by default (as with `add()`). Pass
+`sources={}` to declare "no restricted inputs". Updating a memory does not
+rewrite its existing children: they were derived from the previous content.
+
+**`restrict_source(source, labels)`** adds labels to a source and cascades them
+to every memory whose lineage names it, and to all of their descendants:
+
+```python
+result = memory.restrict_source("hris", ["hr.salary"])
+result.updated  # ids whose stored lineage now carries hr.salary
+```
+
+The cascade walks `derived_from` links with a visited set, so cycles terminate.
+It also restricts descendants whose stored lineage predates the source (for
+example, a child written before its parent gained that source). This
+over-approximates, failing closed. Labels are only ever added; there is no
+declassification.
+
+The cascade uses an **in-memory reverse index** (source to memories, parent to
+children). It is built on the first `restrict_source()` call by scanning the
+whole collection through the vector store's `list()`, because mem0's `get_all`
+requires a scope and a restriction must reach every scope. The scan is bounded
+by `GatedMemory(max_index_scan=100_000)`; above that it raises
+`IndexScanLimitError` rather than cascading over part of the store. After that,
+this instance's `add`, `update` and `delete` keep the index current. Writes made
+directly on `gated.memory`, or by another process, are not seen until a new
+`GatedMemory` rebuilds the index.
+
+Design and probe results: [`DESIGN-update-path.md`](DESIGN-update-path.md).
+
 ## Benchmark
 
 > **Synthetic multi-team setup, deterministic embedder, 420 memories.** These
@@ -112,14 +158,14 @@ aggregates, and 2- and 3-hop summaries. It runs 240 queries at `top_k=10`.
 Full results, definitions, versions and the commit hash are in
 [`results/BENCH.md`](results/BENCH.md).
 
-Run at commit `8783e3b`, 2026-11-15 (synthetic multi-team setup, deterministic
+Run at commit `0c0df18`, 2026-11-16 (synthetic multi-team setup, deterministic
 embedder, 420 memories):
 
 | Condition | Leaked / returned | Leak rate | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
 |---|---|---|---|---|---|
-| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.05 / 2.18 |
-| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.91 / 3.03 |
-| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.07 / 12.57 |
+| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.05 / 2.13 |
+| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.92 / 3.02 |
+| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.06 / 12.59 |
 
 - **Content-only filtering misses derived memories.** It removes raw restricted
   records, but none of what was derived from them: all 563 of its leaks are
@@ -146,6 +192,10 @@ embedder, 420 memories):
   shows up in p95, not p50. These are in-process timings on 420 memories with
   local Qdrant. Latency was not measured at production scale, with a remote
   vector store, or with real embeddings.
+- **The benchmark measures reads only.** It exercises `add` and `search`, not
+  `update()` or `restrict_source()`. The 0.2.0 run gives the same counts, rates
+  and recall as 0.1.0, with read latency within noise; the write-path cost of
+  updates and cascades has not been benchmarked.
 - **Comparison with the paper.** The content-only leak rate falls inside the
   paper's 18.8–25.5% range for naive memory. That is not a replication: the
   workload, store and leak definition all differ.
@@ -175,7 +225,10 @@ entitlements and to declare lineage truthfully.
 
 **Out of scope.**
 - Calls made on the wrapped `Memory` directly (`gated.memory.search(...)`,
-  `history()`, `update()`). These bypass the gate.
+  `gated.memory.update(...)`, `history()`). These bypass the gate and the
+  reverse index. mem0's own `update()` keeps the old lineage record, so text
+  rewritten that way keeps its old (possibly public) lineage. Use
+  `GatedMemory.update()`; a test pins this boundary.
 - Anyone who can write mem0 metadata or the vector store directly. They can
   forge or strip `amu` lineage. The gate is an application-level filter, not
   storage-level enforcement. (For storage-level enforcement on Postgres, see
@@ -199,9 +252,16 @@ entitlements and to declare lineage truthfully.
 - **`infer=True` is unsupported** for gated data (see above).
 - **Only the sync OSS `Memory` is supported.** `AsyncMemory` and the hosted
   `MemoryClient` are not wrapped or tested.
-- **`update()` is not gated or re-closed.** A child's closure is computed when
-  the child is written. Changing a parent's lineage later does not update its
-  children. Deleting a parent leaves children with their recorded closure.
+- **Updates don't propagate on their own.** A child's closure is computed when
+  the child is written. `GatedMemory.update()` on a parent does not rewrite its
+  children; `restrict_source()` does, for the source you name. Deleting a
+  parent leaves children with their recorded closure.
+- **The reverse index is in memory only.** It is rebuilt by a full, bounded
+  scan per `GatedMemory` instance, it is not locked for concurrent writers, and
+  it does not see writes made outside this instance.
+- **Revocation after write is not evaluated.** `restrict_source()` is the
+  mechanism, covered by unit tests, but no experiment has measured revoking
+  access after derived memories are written and re-running searches.
 - **Search cost grows with filtering.** When most top candidates are denied,
   the gate issues several underlying searches. This was measured only as
   small-scale tail overhead (p95 in the benchmark), not at production scale.
