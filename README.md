@@ -158,14 +158,14 @@ aggregates, and 2- and 3-hop summaries. It runs 240 queries at `top_k=10`.
 Full results, definitions, versions and the commit hash are in
 [`results/BENCH.md`](results/BENCH.md).
 
-Run at commit `0c0df18`, 2026-11-16 (synthetic multi-team setup, deterministic
+Run at commit `2a7fb47` (0.2.0), 2026-11-16 (synthetic multi-team setup, deterministic
 embedder, 420 memories):
 
 | Condition | Leaked / returned | Leak rate | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
 |---|---|---|---|---|---|
-| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.05 / 2.13 |
-| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.92 / 3.02 |
-| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.06 / 12.59 |
+| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.02 / 2.08 |
+| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.87 / 2.97 |
+| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.02 / 12.45 |
 
 - **Content-only filtering misses derived memories.** It removes raw restricted
   records, but none of what was derived from them: all 563 of its leaks are
