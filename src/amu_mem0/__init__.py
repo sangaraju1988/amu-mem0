@@ -13,8 +13,10 @@ from .gate import (
     UNENTITLED,
     Decision,
     GatedMemory,
+    IndexScanLimitError,
     InferNotAllowedError,
     LineageMissingWarning,
+    RestrictionResult,
 )
 from .lineage import METADATA_KEY, LineageRecord, MalformedLineageError
 
@@ -23,6 +25,8 @@ __version__ = "0.1.0"
 __all__ = [
     "GatedMemory",
     "Decision",
+    "RestrictionResult",
+    "IndexScanLimitError",
     "LineageRecord",
     "InferNotAllowedError",
     "LineageMissingWarning",

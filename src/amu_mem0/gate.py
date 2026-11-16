@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -35,6 +36,65 @@ class InferNotAllowedError(ValueError):
 
 class LineageMissingWarning(UserWarning):
     """Emitted when a memory without complete lineage is returned under ``allow_with_warning``."""
+
+
+class IndexScanLimitError(RuntimeError):
+    """Raised when building the reverse index would need to scan more than ``max_index_scan`` memories.
+
+    The cascade never runs over a partial index.
+    """
+
+
+@dataclass(frozen=True)
+class RestrictionResult:
+    """Outcome of ``GatedMemory.restrict_source``."""
+
+    source: str
+    labels: tuple[str, ...]
+    updated: tuple[str, ...]
+    skipped: tuple[str, ...]
+
+
+class _LineageIndex:
+    """In-memory reverse index: source -> memory ids, parent id -> child ids."""
+
+    def __init__(self) -> None:
+        self.by_source: dict[str, set[str]] = defaultdict(set)
+        self.by_parent: dict[str, set[str]] = defaultdict(set)
+        self._entries: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+
+    def put(self, memory_id: str, record: LineageRecord) -> None:
+        self.remove(memory_id)
+        sources = tuple(record.closed)
+        for src in sources:
+            self.by_source[src].add(memory_id)
+        for pid in record.derived_from:
+            self.by_parent[pid].add(memory_id)
+        self._entries[memory_id] = (sources, record.derived_from)
+
+    def remove(self, memory_id: str) -> None:
+        """Drop ``memory_id`` as a source holder and as a child. Its own child edges are kept:
+        its children still name it in ``derived_from``."""
+        sources, parents = self._entries.pop(memory_id, ((), ()))
+        for src in sources:
+            self.by_source[src].discard(memory_id)
+        for pid in parents:
+            self.by_parent[pid].discard(memory_id)
+
+    def dependents(self, source: str) -> list[str]:
+        """Every memory whose closed lineage names ``source``, plus all their descendants.
+        Breadth-first with a visited set, so ``derived_from`` cycles terminate."""
+        order: list[str] = []
+        seen: set[str] = set()
+        queue = deque(sorted(self.by_source.get(source, ())))
+        while queue:
+            mid = queue.popleft()
+            if mid in seen:
+                continue
+            seen.add(mid)
+            order.append(mid)
+            queue.extend(sorted(self.by_parent.get(mid, ())))
+        return order
 
 
 @dataclass(frozen=True)
@@ -78,6 +138,9 @@ class GatedMemory:
             filtered-out items do not starve ``top_k``.
         max_fetch: upper bound on how many candidates one gated read requests
             from mem0.
+        max_index_scan: upper bound on how many memories ``restrict_source`` may
+            scan to build its reverse index. Exceeding it raises
+            ``IndexScanLimitError`` instead of cascading over a partial index.
     """
 
     def __init__(
@@ -89,17 +152,20 @@ class GatedMemory:
         allow_infer: bool = False,
         fetch_multiplier: int = 4,
         max_fetch: int = 1000,
+        max_index_scan: int = 100_000,
     ) -> None:
         if on_missing_lineage not in ("deny", "allow", "allow_with_warning"):
             raise ValueError(f"invalid on_missing_lineage: {on_missing_lineage!r}")
-        if fetch_multiplier < 1 or max_fetch < 1:
-            raise ValueError("fetch_multiplier and max_fetch must be >= 1")
+        if fetch_multiplier < 1 or max_fetch < 1 or max_index_scan < 1:
+            raise ValueError("fetch_multiplier, max_fetch and max_index_scan must be >= 1")
         self._memory = memory
         self.sensitive_labels = None if sensitive_labels is None else frozenset(sensitive_labels)
         self.on_missing_lineage = on_missing_lineage
         self.allow_infer = allow_infer
         self.fetch_multiplier = fetch_multiplier
         self.max_fetch = max_fetch
+        self.max_index_scan = max_index_scan
+        self._index: _LineageIndex | None = None
 
     @property
     def memory(self) -> Any:
@@ -148,7 +214,161 @@ class GatedMemory:
         merged[METADATA_KEY] = record.to_metadata()
         if not record.complete:
             logger.info("amu_mem0 add stored with incomplete lineage: %s", record.incomplete_reason)
-        return self._memory.add(messages, metadata=merged, infer=infer, **kwargs)
+        result = self._memory.add(messages, metadata=merged, infer=infer, **kwargs)
+        if self._index is not None:
+            for item in result.get("results", []):
+                if item.get("id"):
+                    self._index.put(str(item["id"]), record)
+        return result
+
+    def update(
+        self,
+        memory_id: str,
+        text: str | None = None,
+        *,
+        sources: Mapping[str, Iterable[str]] | None = None,
+        derived_from: Iterable[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Update a memory and recompute its lineage as a union that never shrinks.
+
+        Args:
+            memory_id: the memory to update.
+            text: new content, passed to ``Memory.update`` (re-embedded by mem0).
+            sources: raw sources the new content was derived from, as in ``add()``.
+            derived_from: ids of memories the new content was derived from.
+            metadata: extra metadata merged by mem0; the ``"amu"`` key is reserved.
+            **kwargs: forwarded to ``Memory.update`` (e.g. ``expiration_date``).
+
+        The stored lineage becomes existing ∪ declared: labels are never removed.
+        Replacing ``text`` without declaring ``sources`` or ``derived_from`` marks the
+        lineage incomplete, as ``add()`` does for undeclared memories; pass
+        ``sources={}`` to declare "no restricted inputs". Existing children are not
+        rewritten; use ``restrict_source()`` to push a restriction to descendants.
+        """
+        if metadata and METADATA_KEY in metadata:
+            raise ValueError(f"metadata key {METADATA_KEY!r} is reserved for lineage")
+        direct = normalize_sources(sources)
+        parents = _dedupe_ids(derived_from)
+        declared = direct is not None or bool(parents)
+        if text is None and not declared and not metadata and not kwargs:
+            raise ValueError("update() needs text, sources, derived_from, metadata or a mem0 keyword argument")
+        existing = self._memory.get(memory_id)
+        if existing is None:
+            raise ValueError(f"memory {memory_id} not found")
+
+        problems: list[str] = []
+        try:
+            old = LineageRecord.from_metadata(existing.get("metadata"))
+        except MalformedLineageError:
+            old = None
+            problems.append("existing lineage was malformed")
+        if old is None and not problems and not declared:
+            problems.append("no existing lineage and none declared")
+        if old is not None and not old.complete:
+            problems.append(old.incomplete_reason or "existing lineage incomplete")
+        if text is not None and not declared:
+            problems.append("text replaced without declaring its sources")
+        parent_maps, parent_problems = self._resolve_parents(parents)
+        problems += parent_problems
+
+        base = old or LineageRecord()
+        record = LineageRecord(
+            sources=merge_closed(base.sources, direct or {}),
+            derived_from=_dedupe_ids(base.derived_from + parents),
+            closed=merge_closed(base.closed, direct or {}, *parent_maps),
+            complete=not problems,
+            incomplete_reason="; ".join(dict.fromkeys(problems)) or None,
+        )
+        merged = dict(metadata or {})
+        merged[METADATA_KEY] = record.to_metadata()
+        result = self._memory.update(memory_id, text=text, metadata=merged, **kwargs)
+        if not record.complete:
+            logger.info("amu_mem0 update id=%s stored with incomplete lineage", memory_id)
+        if self._index is not None:
+            self._index.put(str(memory_id), record)
+        return result
+
+    # ----------------------------------------------------------- restriction
+
+    def restrict_source(self, source: str, labels: Iterable[str]) -> RestrictionResult:
+        """Add ``labels`` to ``source`` and cascade them to every dependent memory.
+
+        Every memory whose closed lineage names ``source`` gets the labels, and so does
+        each of their descendants (via ``derived_from``), walked with a visited set so
+        cycles terminate. Labels are only ever added. Descendants are restricted even if
+        their stored lineage predates ``source``; this over-approximates, failing closed.
+
+        The reverse index is built on first use by scanning the whole collection
+        (bounded by ``max_index_scan``) and kept in sync by this instance's
+        ``add``/``update``/``delete``. Writes made directly on ``memory`` are not seen.
+        """
+        if not isinstance(source, str) or not source:
+            raise ValueError("source must be a non-empty string")
+        if isinstance(labels, (str, bytes)):
+            raise TypeError("labels must be an iterable of strings, not a string")
+        new_labels = tuple(sorted({str(label) for label in labels}))
+        if not new_labels:
+            raise ValueError("labels must not be empty")
+
+        index = self._ensure_index()
+        updated: list[str] = []
+        skipped: list[str] = []
+        for mid in index.dependents(source):
+            item = self._memory.get(mid)
+            if item is None:
+                skipped.append(mid)  # deleted; its children were still walked
+                continue
+            try:
+                rec = LineageRecord.from_metadata(item.get("metadata"))
+            except MalformedLineageError:
+                rec = None
+            if rec is None:
+                skipped.append(mid)  # already denied by default
+                continue
+            add = {source: new_labels}
+            new_rec = LineageRecord(
+                sources=merge_closed(rec.sources, add) if source in rec.sources else rec.sources,
+                derived_from=rec.derived_from,
+                closed=merge_closed(rec.closed, add),
+                complete=rec.complete,
+                incomplete_reason=rec.incomplete_reason,
+            )
+            self._memory.update(mid, metadata={METADATA_KEY: new_rec.to_metadata()})
+            index.put(mid, new_rec)
+            updated.append(mid)
+        logger.info(
+            "amu_mem0 restrict_source source=%s labels=%s updated=%d skipped=%d",
+            source,
+            ",".join(new_labels),
+            len(updated),
+            len(skipped),
+        )
+        return RestrictionResult(source, new_labels, tuple(updated), tuple(skipped))
+
+    def _ensure_index(self) -> _LineageIndex:
+        if self._index is not None:
+            return self._index
+        listed = self._memory.vector_store.list(filters=None, top_k=self.max_index_scan + 1)
+        if isinstance(listed, (list, tuple)) and listed and isinstance(listed[0], (list, tuple)):
+            listed = listed[0]  # some stores return (rows, next_offset)
+        rows = list(listed or ())
+        if len(rows) > self.max_index_scan:
+            raise IndexScanLimitError(
+                f"reverse index needs more than max_index_scan={self.max_index_scan} memories; "
+                "raise the limit to cascade over this store"
+            )
+        index = _LineageIndex()
+        for row in rows:
+            try:
+                rec = LineageRecord.from_metadata(getattr(row, "payload", None) or {})
+            except MalformedLineageError:
+                continue
+            if rec is not None:
+                index.put(str(row.id), rec)
+        self._index = index
+        return index
 
     def _build_record(
         self,
@@ -158,11 +378,26 @@ class GatedMemory:
         inferred: bool,
     ) -> LineageRecord:
         direct = normalize_sources(sources)
-        parents = tuple(dict.fromkeys(str(p) for p in (derived_from or ())))
+        parents = _dedupe_ids(derived_from)
         problems: list[str] = []
         if direct is None and not parents:
             problems.append("no sources or derived_from declared")
-        closed_maps: list[Mapping[str, Iterable[str]]] = [direct or {}]
+        parent_maps, parent_problems = self._resolve_parents(parents)
+        problems += parent_problems
+        if inferred:
+            problems.append("written with infer=True")
+        return LineageRecord(
+            sources=direct or {},
+            derived_from=parents,
+            closed=merge_closed(direct or {}, *parent_maps),
+            complete=not problems,
+            incomplete_reason="; ".join(problems) or None,
+        )
+
+    def _resolve_parents(self, parents: Iterable[str]) -> tuple[list[dict[str, tuple[str, ...]]], list[str]]:
+        """Fetch each parent's closed lineage. Returns (closed maps, problems)."""
+        maps: list[dict[str, tuple[str, ...]]] = []
+        problems: list[str] = []
         for pid in parents:
             parent = self._memory.get(pid)
             if parent is None:
@@ -178,18 +413,10 @@ class GatedMemory:
                 continue
             # Inherit what is known even when the parent is incomplete; the child is
             # then incomplete too, so it can never be "more visible" than its parent.
-            closed_maps.append(prec.closed)
+            maps.append(prec.closed)
             if not prec.complete:
                 problems.append(f"parent {pid} has incomplete lineage")
-        if inferred:
-            problems.append("written with infer=True")
-        return LineageRecord(
-            sources=direct or {},
-            derived_from=parents,
-            closed=merge_closed(*closed_maps),
-            complete=not problems,
-            incomplete_reason="; ".join(problems) or None,
-        )
+        return maps, problems
 
     # ------------------------------------------------------------------- read
 
@@ -303,5 +530,16 @@ class GatedMemory:
         return item
 
     def delete(self, memory_id: str) -> Any:
-        """Pass-through to ``Memory.delete``. Children keep their closed lineage."""
-        return self._memory.delete(memory_id)
+        """Pass-through to ``Memory.delete``. Children keep their closed lineage.
+
+        If the reverse index has been built, the memory is removed from it; edges to its
+        children are kept, since the children still name it in ``derived_from``.
+        """
+        result = self._memory.delete(memory_id)
+        if self._index is not None:
+            self._index.remove(str(memory_id))
+        return result
+
+
+def _dedupe_ids(ids: Iterable[str] | None) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(str(i) for i in (ids or ())))
