@@ -93,6 +93,7 @@ finance sees: ['Payroll cost grew 8% QoQ', 'Q3 payroll total is 4.2M']
 | `add()` with neither `sources` nor `derived_from` | stored, then denied | `incomplete_lineage` |
 | `update()` replaces the text without declaring `sources` or `derived_from` | stored, then denied | `incomplete_lineage` |
 | A `derived_from` id is missing, or the parent has no or incomplete lineage | stored, then denied | `incomplete_lineage` |
+| An ancestor is deleted later, through `GatedMemory.delete()` | every descendant rewritten as unverified, then denied | `incomplete_lineage` |
 | `amu` metadata is malformed | denied | `malformed_lineage` |
 | `add(infer=True)` | raises `InferNotAllowedError` | n/a |
 
@@ -140,7 +141,7 @@ over-approximates, failing closed. Labels are only ever added; there is no
 declassification.
 
 The cascade uses an **in-memory reverse index** (source to memories, parent to
-children). It is built on the first `restrict_source()` call by scanning the
+children). It is built on the first `restrict_source()` or `delete()` call by scanning the
 whole collection through the vector store's `list()`, because mem0's `get_all`
 requires a scope and a restriction must reach every scope. The scan is bounded
 by `GatedMemory(max_index_scan=100_000)`; above that it raises
@@ -149,7 +150,19 @@ this instance's `add`, `update` and `delete` keep the index current. Writes made
 directly on `gated.memory`, or by another process, are not seen until a new
 `GatedMemory` rebuilds the index.
 
-Design and probe results: [`DESIGN-update-path.md`](DESIGN-update-path.md).
+**Deleting an ancestor** (`delete(memory_id)`) marks every memory derived from
+it, directly or transitively, as unverified (`complete=False`, with an
+`incomplete_reason` naming the deleted id). Once an ancestor is gone, its full
+source closure can't be proven, so descendants are denied by default, even to
+requesters who hold every label, until their lineage is repaired. There is no
+repair API yet. The index is built before anything is deleted, so if
+`max_index_scan` is exceeded, `delete()` raises and deletes nothing. This is a
+different case from **changing an ancestor's authority** with
+`restrict_source()`: the ancestor still exists, and descendants are denied only
+to requesters missing the new labels.
+
+Design and probe results: [`DESIGN-update-path.md`](DESIGN-update-path.md) and
+[`DESIGN-revocation-fixture.md`](DESIGN-revocation-fixture.md).
 
 ## Benchmark
 
@@ -164,14 +177,14 @@ aggregates, and 2- and 3-hop summaries. It runs 240 queries at `top_k=10`.
 Full results, definitions, versions and the commit hash are in
 [`results/BENCH.md`](results/BENCH.md).
 
-Run at commit `2a7fb47` (0.2.0), 2026-11-16 (synthetic multi-team setup, deterministic
+Run at commit `207ff52` (0.2.0), 2026-11-17 (synthetic multi-team setup, deterministic
 embedder, 420 memories):
 
 | Condition | Leaked / returned | Leak rate | Queries with a leak | Recall@10 for entitled users | p50 / p95 search ms |
 |---|---|---|---|---|---|
-| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.02 / 2.08 |
-| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.87 / 2.97 |
-| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.02 / 12.45 |
+| Plain mem0 | 857 / 2400 | 35.7% | 71.2% | 0.650 | 2.05 / 2.18 |
+| Content-only filter (each memory's own labels) | 563 / 2400 | 23.5% | 62.9% | 0.816 | 2.92 / 3.06 |
+| amu-mem0 gate | 0 / 2164 | 0.0% | 0.0% | 0.999 | 3.06 / 12.63 |
 
 - **Content-only filtering misses derived memories.** It removes raw restricted
   records, but none of what was derived from them: all 563 of its leaks are
@@ -261,13 +274,26 @@ entitlements and to declare lineage truthfully.
 - **Updates don't propagate on their own.** A child's closure is computed when
   the child is written. `GatedMemory.update()` on a parent does not rewrite its
   children; `restrict_source()` does, for the source you name. Deleting a
-  parent leaves children with their recorded closure.
+  memory through `GatedMemory.delete()` marks its descendants unverified;
+  deleting it through `gated.memory.delete()` does not.
+- **Allowed results can name an ancestor the requester can't read.** Results
+  carry their own lineage metadata, including `derived_from` ids. If a parent
+  gains restrictions through `update()` after a child was written, the child
+  stays readable and its `derived_from` still names the parent's id. That
+  reveals the parent exists (not its content or labels). `restrict_source()`
+  does not have this gap, because it cascades to children.
+- **`delete()` scans the store on first use.** It builds the reverse index
+  before deleting, so the first `delete()` per `GatedMemory` costs a full,
+  bounded scan, and on a store larger than `max_index_scan` it raises instead
+  of deleting.
 - **The reverse index is in memory only.** It is rebuilt by a full, bounded
   scan per `GatedMemory` instance, it is not locked for concurrent writers, and
   it does not see writes made outside this instance.
-- **Revocation after write is not evaluated.** `restrict_source()` is the
-  mechanism, covered by unit tests, but no experiment has measured revoking
-  access after derived memories are written and re-running searches.
+- **Revocation after write is tested as a deterministic fixture, not measured
+  at scale.** `tests/test_revocation.py` covers allow, then revoke, then re-read
+  on `search`, `get` and `get_all` with mixed sources. It runs on the offline
+  test store (hashed embedder, local Qdrant). amu-mem0 keeps no permission
+  cache: every read re-evaluates current entitlements.
 - **Search cost grows with filtering.** When most top candidates are denied,
   the gate issues several underlying searches. This was measured only as
   small-scale tail overhead (p95 in the benchmark), not at production scale.
