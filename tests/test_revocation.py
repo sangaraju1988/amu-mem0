@@ -174,6 +174,48 @@ def test_denial_accounting_is_operator_side_only(gm, caplog):
     assert "4815162342" not in caplog.text
 
 
+def assert_no_lineage(item, *hidden_ids):
+    """A public result carries no lineage record and names none of ``hidden_ids``."""
+    assert METADATA_KEY not in (item.get("metadata") or {})
+    for mid in hidden_ids:
+        assert mid not in repr(item)
+
+
+def test_public_results_carry_no_lineage_record(gm):
+    a, pub, b = mixed_b(gm)
+    tagged = add_id(gm, "tagged weekly note", sources={"calendar": []}, metadata={"team": "finance"})
+    found = gm.search("weekly payroll digest", filters=SCOPE, entitlements=HR)["results"]
+    listed = gm.get_all(filters=SCOPE, entitlements=HR)["results"]
+    b_items = [r for r in found + listed if r["id"] == b] + [gm.get(b, entitlements=HR)]
+    assert len(b_items) == 3  # B came back on all three paths ...
+    for item in b_items:
+        assert_no_lineage(item, a, pub)  # ... without its lineage or its parents' ids
+    for item in found + listed:
+        assert METADATA_KEY not in (item.get("metadata") or {})
+    assert gm.get(tagged, entitlements=HR)["metadata"] == {"team": "finance"}  # user metadata kept
+    # The stored record is untouched: lineage is still there for the gate and operators.
+    assert gm.memory.get(b)["metadata"][METADATA_KEY]["derived_from"] == [a, pub]
+
+
+def test_child_of_restricted_parent_reveals_neither_lineage_nor_parent(gm):
+    parent = add_id(gm, "q3 payroll total is 4.2m", sources={"hris": ["hr.salary"]})
+    child = add_id(gm, "payroll grew eight percent", derived_from=[parent])
+    for ents in (MKT, HR):  # denied to MKT; allowed to HR, still without lineage
+        responses = [
+            gm.search("payroll grew", filters=SCOPE, entitlements=ents),
+            gm.get_all(filters=SCOPE, entitlements=ents),
+            {"results": [r for r in [gm.get(child, entitlements=ents)] if r]},
+        ]
+        for res in responses:
+            for item in res["results"]:
+                assert_no_lineage(item)
+            if ents == MKT:
+                assert child not in repr(res) and parent not in repr(res)
+            else:
+                child_items = [r for r in res["results"] if r["id"] == child]
+                assert child_items and all(parent not in repr(r) for r in child_items)
+
+
 # ------------------------------------------------------------ pagination
 
 
@@ -196,7 +238,7 @@ def test_refill_when_denied_candidates_consume_initial_top_k(gm):
     assert [r["id"] for r in page] == public[:5]
     scores = [r["score"] for r in page]
     assert scores == sorted(scores, reverse=True)
-    assert all(gm.check(r, entitlements=MKT).allowed for r in page)
+    assert all(gm.check(gm.memory.get(r["id"]), entitlements=MKT).allowed for r in page)  # stored record
 
 
 def test_pages_by_deeper_fetch_are_stable_without_duplicates(gm):
@@ -217,3 +259,27 @@ def test_pages_by_deeper_fetch_are_stable_without_duplicates(gm):
     assert deeper[:5] == page_1  # a deeper fetch extends page 1, it doesn't reorder it
     assert not set(page_1) & set(page_2)  # no duplicates across pages
     assert page_1 + page_2 == public[:10]
+
+
+def test_redaction_does_not_mutate_what_mem0_returned(gm):
+    _, _, b = mixed_b(gm)
+    handed_back = []
+    real_get, real_search = gm.memory.get, gm.memory.search
+
+    def spy_get(*a, **kw):
+        out = real_get(*a, **kw)
+        handed_back.append(out)
+        return out
+
+    def spy_search(*a, **kw):
+        out = real_search(*a, **kw)
+        handed_back.extend(out["results"])
+        return out
+
+    gm.memory.get, gm.memory.search = spy_get, spy_search
+    gm.get(b, entitlements=HR)
+    gm.search("weekly payroll digest", filters=SCOPE, entitlements=HR)
+    b_objects = [o for o in handed_back if o and o.get("id") == b]
+    assert len(b_objects) >= 2
+    for obj in b_objects:  # the exact dicts mem0 returned still hold their lineage
+        assert METADATA_KEY in obj["metadata"]

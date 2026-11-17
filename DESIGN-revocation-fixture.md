@@ -1,7 +1,7 @@
 # Revocation-after-write fixture
 
 Branch `feat/revocation-fixture`. Tests: [`tests/test_revocation.py`](tests/test_revocation.py)
-(14 tests). This is White Paper 2's H1 experiment, built to the spec from mem0
+(17 tests). This is White Paper 2's H1 experiment, built to the spec from mem0
 Discussion #7390.
 
 ## How to run
@@ -65,6 +65,16 @@ derived from both (`derived_from=[a, pub]`). "All three paths" means `search`, `
 - `test_denial_accounting_is_operator_side_only`: per-item `check()` decisions and the
   `amu_mem0` log record each denial (id, reason, labels). The log contains no memory text.
 
+**Lineage redaction.**
+- `test_public_results_carry_no_lineage_record`: B is returned on all three paths with no `amu`
+  record and without its parents' ids. User metadata is kept, and the stored record is
+  unchanged.
+- `test_child_of_restricted_parent_reveals_neither_lineage_nor_parent`: denied, the child and
+  its parent are absent from the response. Allowed, the child has no lineage and doesn't name
+  the parent.
+- `test_redaction_does_not_mutate_what_mem0_returned`: the dicts mem0 handed back still hold
+  their lineage; redaction works on a copy.
+
 **Pagination.**
 - `test_refill_when_denied_candidates_consume_initial_top_k`: mem0's own top 5 for the query
   is entirely restricted memories (asserted as a precondition). The gated page still holds 5
@@ -109,12 +119,13 @@ registry is built here. That is White Paper 2's H2.
 
 ## Known limitations
 
-- **An allowed result can name an ancestor the requester can't read.** This was probed on
-  2026-11-17. A parent gains restrictions through `update()` after its child was written, and
-  updates don't propagate to children by design, so the child stays readable. Its
-  `metadata.amu.derived_from` then contains the parent id, which reveals that the parent exists
-  (not its content or labels). `restrict_source()` cascades to children and doesn't have this
-  gap. Closing it would mean redacting lineage metadata in public results, which is not done here.
+- **A child can keep stale lineage** (probed 2026-11-17). If a parent gains restrictions
+  through `update()` after its child was written, updates don't propagate to children by
+  design, so the child keeps its write-time closure and stays readable. Before lineage was
+  redacted from public results, the child's `metadata.amu.derived_from` also revealed the
+  parent's id; it no longer does (`test_child_of_restricted_parent_reveals_neither_lineage_nor_parent`).
+  The stale closure itself is future work. `restrict_source()` cascades to children and doesn't
+  have this gap.
 - **Deletes need the gated path.** Calls on `gm.memory` are ungated and skip descendant
   marking.
 - **The first `delete()` per `GatedMemory` scans the whole store** (bounded by

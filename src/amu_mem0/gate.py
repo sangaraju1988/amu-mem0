@@ -428,7 +428,12 @@ class GatedMemory:
     # ------------------------------------------------------------------- read
 
     def check(self, item: Mapping[str, Any], *, entitlements: Iterable[str]) -> Decision:
-        """Decide whether a mem0 result dict may be returned to a requester."""
+        """Decide whether a mem0 result dict may be returned to a requester.
+
+        ``item`` must be the stored record (e.g. from ``memory.get``), not a public result
+        from this class: public results have their lineage removed, so ``check`` would
+        report them as ``missing_lineage``.
+        """
         memory_id = str(item.get("id"))
         try:
             record = LineageRecord.from_metadata(item.get("metadata"))
@@ -488,7 +493,7 @@ class GatedMemory:
         # that denied records exist, so it carries no ids, labels or counts for them.
         for d in denied:
             self._log_denial(op, d)
-        return {"results": allowed[:top_k]}
+        return {"results": [_redact(item) for item in allowed[:top_k]]}
 
     def search(
         self,
@@ -540,7 +545,7 @@ class GatedMemory:
         if not d.allowed:
             self._log_denial("get", d)
             return None
-        return item
+        return _redact(item)
 
     def delete(self, memory_id: str) -> Any:
         """Delete a memory and mark everything derived from it as unverified.
@@ -581,3 +586,22 @@ class GatedMemory:
 
 def _dedupe_ids(ids: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(i) for i in (ids or ())))
+
+
+def _redact(item: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy of ``item`` for the caller, without the ``amu`` lineage record.
+
+    Lineage names parent ids and source labels, which can reveal records the caller
+    cannot read. The gate decision is made on the stored record before this runs; the
+    mem0 result passed in is not modified. If ``amu`` was the only metadata, the
+    ``metadata`` key is dropped, matching how mem0 omits empty metadata.
+    """
+    out = dict(item)
+    metadata = out.get("metadata")
+    if isinstance(metadata, Mapping) and METADATA_KEY in metadata:
+        rest = {k: v for k, v in metadata.items() if k != METADATA_KEY}
+        if rest:
+            out["metadata"] = rest
+        else:
+            del out["metadata"]
+    return out

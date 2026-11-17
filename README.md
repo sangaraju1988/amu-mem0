@@ -69,7 +69,12 @@ finance sees: ['Payroll cost grew 8% QoQ', 'Q3 payroll total is 4.2M']
   `search` and `get_all` return `{"results": [...]}` with allowed memories only.
   The response reveals nothing about denied candidates: no ids, labels, reasons
   or counts, so a short page is simply short. `get` returns `None` both for a
-  denied memory and for a missing one. Denial details are **internal diagnostics
+  denied memory and for a missing one. Returned memories carry **no lineage**:
+  the `amu` record (sources, labels, `derived_from` parent ids) is removed from
+  each result's `metadata`, on a copy, so results never name a parent or source
+  the caller might not be able to read. Your own metadata keys are kept, and the
+  stored record is unchanged (read it with `gated.memory.get(id)`, which is
+  ungated). Denial details are **internal diagnostics
   only**: they are logged on the `amu_mem0` logger (ids, reason codes and label
   names, never memory text), and `check(item, entitlements=...)` returns the
   `Decision` for a single item. (The released 0.1.0 also returned an
@@ -276,12 +281,13 @@ entitlements and to declare lineage truthfully.
   children; `restrict_source()` does, for the source you name. Deleting a
   memory through `GatedMemory.delete()` marks its descendants unverified;
   deleting it through `gated.memory.delete()` does not.
-- **Allowed results can name an ancestor the requester can't read.** Results
-  carry their own lineage metadata, including `derived_from` ids. If a parent
-  gains restrictions through `update()` after a child was written, the child
-  stays readable and its `derived_from` still names the parent's id. That
-  reveals the parent exists (not its content or labels). `restrict_source()`
-  does not have this gap, because it cascades to children.
+- **A child can keep stale lineage.** If a parent gains restrictions through
+  `update()` after a child was written, the child keeps the closure it was
+  written with and stays readable to requesters who can no longer read the
+  parent. Public results no longer include lineage, so the child does not
+  reveal the parent's id, but the stale closure itself is unresolved (future
+  work). `restrict_source()` does not have this gap, because it cascades to
+  children.
 - **`delete()` scans the store on first use.** It builds the reverse index
   before deleting, so the first `delete()` per `GatedMemory` costs a full,
   bounded scan, and on a store larger than `max_index_scan` it raises instead
