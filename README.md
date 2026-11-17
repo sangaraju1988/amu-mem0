@@ -41,7 +41,7 @@ payroll = memory.add(
 memory.add("Payroll cost grew 8% QoQ", agent_id="analyst", derived_from=[payroll])
 
 memory.search("payroll", filters={"agent_id": "analyst"}, entitlements={"mkt.campaign"})
-# {'results': [], 'amu_denied': [{'id': ..., 'reason': 'unentitled', 'unentitled_labels': ['hr.salary']}, ...]}
+# {'results': []}  (nothing about the denied memories is returned)
 
 memory.search("payroll", filters={"agent_id": "analyst"}, entitlements={"hr.salary"})
 # both memories
@@ -51,7 +51,8 @@ memory.search("payroll", filters={"agent_id": "analyst"}, entitlements={"hr.sala
 
 ```
 marketing sees: []
-marketing denied: [('unentitled', ['hr.salary']), ('unentitled', ['hr.salary'])]
+marketing response keys: ['results']
+operator check: unentitled ['hr.salary']
 finance sees: ['Payroll cost grew 8% QoQ', 'Q3 payroll total is 4.2M']
 ```
 
@@ -65,10 +66,15 @@ finance sees: ['Payroll cost grew 8% QoQ', 'Q3 payroll total is 4.2M']
   every label beneath it, and a memory with mixed sources carries the union.
 - **Reads.** `search`, `get` and `get_all` require `entitlements=` and keep a
   result only if every sensitive label in its closed lineage is in that set.
-  `search` and `get_all` return mem0's normal shape plus `amu_denied`, which gives
-  the id, a reason code and the unentitled labels for every removed candidate.
-  Denials are also logged on the `amu_mem0` logger, with ids and label names only,
-  never memory text.
+  `search` and `get_all` return `{"results": [...]}` with allowed memories only.
+  The response reveals nothing about denied candidates: no ids, labels, reasons
+  or counts, so a short page is simply short. `get` returns `None` both for a
+  denied memory and for a missing one. Denial details are **internal diagnostics
+  only**: they are logged on the `amu_mem0` logger (ids, reason codes and label
+  names, never memory text), and `check(item, entitlements=...)` returns the
+  `Decision` for a single item. (The released 0.1.0 also returned an
+  `amu_denied` list; it was removed because it told the caller which restricted
+  records exist.)
 - **Labels.** By default every label gates a read. Pass
   `GatedMemory(memory, sensitive_labels={...})` to gate only on a registry
   (the paper's semantics). Labels outside the registry are then ignored.

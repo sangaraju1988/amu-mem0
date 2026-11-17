@@ -476,9 +476,12 @@ class GatedMemory:
                 break
             prev_len = len(raw)
             fetch = min(fetch * 2, self.max_fetch)
+        # Denials are internal diagnostics: logged for operators (ids, reasons, label
+        # names; never content) but never returned. The public response must not reveal
+        # that denied records exist, so it carries no ids, labels or counts for them.
         for d in denied:
             self._log_denial(op, d)
-        return {"results": allowed[:top_k], "amu_denied": [d.to_dict() for d in denied]}
+        return {"results": allowed[:top_k]}
 
     def search(
         self,
@@ -491,9 +494,11 @@ class GatedMemory:
     ) -> dict[str, Any]:
         """``Memory.search`` with the gate applied.
 
-        Returns mem0's result shape plus ``"amu_denied"``: one entry (id, reason,
-        unentitled labels) per candidate the gate removed. Memory text of denied
-        items is never included or logged.
+        Returns ``{"results": [...]}`` holding only allowed memories. Nothing about
+        denied candidates (ids, labels, reasons or how many there were) appears in the
+        response; a short page is simply short. Denials are logged on the ``amu_mem0``
+        logger (ids, reasons and label names, never memory text), and ``check()`` gives
+        the decision for an individual item.
         """
         return self._gated_fetch(
             "search",
@@ -510,7 +515,8 @@ class GatedMemory:
         top_k: int = 20,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """``Memory.get_all`` with the gate applied (same return shape as ``search``)."""
+        """``Memory.get_all`` with the gate applied. Returns ``{"results": [...]}`` of allowed
+        memories only, with no information about denied ones (see ``search``)."""
         return self._gated_fetch(
             "get_all",
             lambda k: self._memory.get_all(filters=filters, top_k=k, **kwargs),

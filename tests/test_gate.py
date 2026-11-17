@@ -9,12 +9,23 @@ from amu_mem0 import (
     METADATA_KEY,
     MISSING_LINEAGE,
     UNENTITLED,
+    Decision,
     GatedMemory,
     InferNotAllowedError,
     LineageMissingWarning,
 )
 
 from .conftest import SCOPE, add_id, ids
+
+
+def assert_reveals_nothing(res, memory_id, *secrets):
+    """The public response carries only allowed results: no denial key, and the denied
+    record's id, content and labels appear nowhere in the serialized response."""
+    assert set(res) == {"results"}
+    dumped = repr(res)
+    for needle in (memory_id, *secrets):
+        assert needle not in dumped
+
 
 HR = {"hr.salary"}
 MKT = {"mkt.campaign"}
@@ -25,7 +36,9 @@ def test_source_visible_only_to_entitled(gm):
     assert ids(gm.search("payroll total", filters=SCOPE, entitlements=HR)) == [mid]
     res = gm.search("payroll total", filters=SCOPE, entitlements=MKT)
     assert res["results"] == []
-    assert res["amu_denied"] == [{"id": mid, "reason": UNENTITLED, "unentitled_labels": ["hr.salary"]}]
+    assert_reveals_nothing(res, mid, "q3 payroll total", "hr.salary")
+    # Operator-side accounting stays available through check().
+    assert gm.check(gm.memory.get(mid), entitlements=MKT) == Decision(mid, False, UNENTITLED, ("hr.salary",))
 
 
 def test_public_source_visible_to_everyone(gm):
@@ -97,7 +110,8 @@ def test_memory_written_outside_gate_is_denied_by_default(gm):
     raw = gm.memory.add("legacy note about payroll", infer=False, **SCOPE)["results"][0]["id"]
     res = gm.search("payroll", filters=SCOPE, entitlements=HR | MKT)
     assert raw not in ids(res)
-    assert {"id": raw, "reason": MISSING_LINEAGE, "unentitled_labels": []} in res["amu_denied"]
+    assert_reveals_nothing(res, raw, "legacy note")
+    assert gm.check(gm.memory.get(raw), entitlements=HR | MKT) == Decision(raw, False, MISSING_LINEAGE)
 
 
 def test_undeclared_lineage_is_incomplete_and_denied(gm):
@@ -105,7 +119,8 @@ def test_undeclared_lineage_is_incomplete_and_denied(gm):
     assert gm.memory.get(mid)["metadata"][METADATA_KEY]["complete"] is False
     res = gm.get_all(filters=SCOPE, entitlements=HR | MKT)
     assert res["results"] == []
-    assert res["amu_denied"][0]["reason"] == INCOMPLETE_LINEAGE
+    assert_reveals_nothing(res, mid, "without saying where from")
+    assert gm.check(gm.memory.get(mid), entitlements=HR | MKT).reason == INCOMPLETE_LINEAGE
 
 
 def test_unresolved_parent_makes_child_incomplete(gm):

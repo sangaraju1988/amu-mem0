@@ -22,6 +22,9 @@ marketing = memory.search("payroll", filters={"agent_id": "analyst"}, entitlemen
 finance = memory.search("payroll", filters={"agent_id": "analyst"}, entitlements={"hr.salary"})
 
 print("marketing sees:", [r["memory"] for r in marketing["results"]])
-print("marketing denied:", [(d["reason"], d["unentitled_labels"]) for d in marketing["amu_denied"]])
+print("marketing response keys:", sorted(marketing))  # nothing about denied records
+# Operator-side diagnostics: check() explains an individual decision.
+decision = memory.check(memory.memory.get(payroll), entitlements={"mkt.campaign"})
+print("operator check:", decision.reason, list(decision.unentitled_labels))
 print("finance sees:", sorted(r["memory"] for r in finance["results"]))
 memory.memory.close()
