@@ -6,7 +6,7 @@ import logging
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from .lineage import (
@@ -82,11 +82,18 @@ class _LineageIndex:
             self.by_parent[pid].discard(memory_id)
 
     def dependents(self, source: str) -> list[str]:
-        """Every memory whose closed lineage names ``source``, plus all their descendants.
-        Breadth-first with a visited set, so ``derived_from`` cycles terminate."""
+        """Every memory whose closed lineage names ``source``, plus all their descendants."""
+        return self._walk(sorted(self.by_source.get(source, ())))
+
+    def descendants(self, memory_id: str) -> list[str]:
+        """Every memory derived, directly or transitively, from ``memory_id`` (excluding itself)."""
+        return [m for m in self._walk(sorted(self.by_parent.get(memory_id, ()))) if m != memory_id]
+
+    def _walk(self, start: list[str]) -> list[str]:
+        """Breadth-first over child edges with a visited set, so ``derived_from`` cycles terminate."""
         order: list[str] = []
         seen: set[str] = set()
-        queue = deque(sorted(self.by_source.get(source, ())))
+        queue = deque(start)
         while queue:
             mid = queue.popleft()
             if mid in seen:
@@ -536,14 +543,39 @@ class GatedMemory:
         return item
 
     def delete(self, memory_id: str) -> Any:
-        """Pass-through to ``Memory.delete``. Children keep their closed lineage.
+        """Delete a memory and mark everything derived from it as unverified.
 
-        If the reverse index has been built, the memory is removed from it; edges to its
-        children are kept, since the children still name it in ``derived_from``.
+        Once an ancestor is gone, the store can no longer prove a descendant's full
+        source closure, so every descendant (walked through ``derived_from`` with a
+        visited set) is rewritten with ``complete=False`` and an ``incomplete_reason``
+        naming the deleted id. Under the default policy they are then denied, even to
+        requesters holding every label, until their lineage is repaired.
+
+        The reverse index is built first (bounded by ``max_index_scan``). If it cannot
+        be built, ``IndexScanLimitError`` is raised before anything is deleted. Returns
+        mem0's ``delete`` result.
         """
+        index = self._ensure_index()
         result = self._memory.delete(memory_id)
-        if self._index is not None:
-            self._index.remove(str(memory_id))
+        mid = str(memory_id)
+        index.remove(mid)
+        marked = 0
+        for desc in index.descendants(mid):
+            item = self._memory.get(desc)
+            if item is None:
+                continue
+            try:
+                rec = LineageRecord.from_metadata(item.get("metadata"))
+            except MalformedLineageError:
+                continue  # already denied by default
+            if rec is None:
+                continue
+            reasons = [r for r in (rec.incomplete_reason, f"ancestor {mid} deleted") if r]
+            new_rec = replace(rec, complete=False, incomplete_reason="; ".join(dict.fromkeys(reasons)))
+            self._memory.update(desc, metadata={METADATA_KEY: new_rec.to_metadata()})
+            index.put(desc, new_rec)
+            marked += 1
+        logger.info("amu_mem0 delete id=%s descendants_marked_incomplete=%d", mid, marked)
         return result
 
 
