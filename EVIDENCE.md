@@ -15,6 +15,7 @@ All times UTC. Each entry links to a public, timestamped record.
 | 2026-11-15T05:16:43Z | PyPI release 0.1.0 (wheel + sdist); verified by clean install + quickstart | https://pypi.org/project/amu-mem0/0.1.0/ (run https://github.com/sangaraju1988/amu-mem0/actions/runs/43680359990) |
 | 2026-11-16T14:24:37Z | Branch `fix/update-path-gate` (0.2.0, not merged or released): gated `update()` with monotonic lineage, `restrict_source()` cascade with reverse index; 38 tests (23 + 15 new); bench re-run at `2a7fb47` | https://github.com/sangaraju1988/amu-mem0/tree/fix/update-path-gate |
 | 2026-11-17T13:28:57Z | Branch `feat/revocation-fixture` (from `fix/update-path-gate`, 0.2.0, not merged or released): revocation-after-write fixture `tests/test_revocation.py` (14 tests), `amu_denied` removed from public responses, delete-time marking of descendants; 52 tests (23 + 15 + 14); bench re-run at `207ff52` | https://github.com/sangaraju1988/amu-mem0/tree/feat/revocation-fixture |
+| 2026-11-17T13:40:26Z | Same branch: lineage (`amu` record, incl. `derived_from` parent ids) redacted from public `search`/`get`/`get_all` results; 55 tests (23 + 15 + 17); bench re-run at `cc01b7e` | https://github.com/sangaraju1988/amu-mem0/tree/feat/revocation-fixture |
 
 ## Status
 
@@ -60,6 +61,18 @@ deterministic tests in `tests/test_revocation.py`, not by this benchmark.
 | amu-mem0 gate | 3.02 / 12.45 | 3.06 / 12.63 |
 
 Tests on this branch: 52 (`tests/test_gate.py` 23, `tests/test_update.py` 15, `tests/test_revocation.py` 14).
+
+### Lineage-redaction re-run (branch `feat/revocation-fixture`, commit `cc01b7e`, 2026-11-17T13:40:26Z)
+
+Same synthetic setup and seed. Every count, rate and recall value is identical to the `207ff52` run above (0 differing non-latency fields; gate 0 / 2164 leaked, recall@10 0.999; sweep queries with a leak 0.0% / 11.7% / 22.9% / 35.4%). Redaction runs after the gate decision, so it does not change which memories are returned.
+
+| Condition | p50 / p95 ms, `207ff52` | p50 / p95 ms, `cc01b7e` |
+|---|---|---|
+| Plain mem0 | 2.05 / 2.18 | 2.05 / 2.15 |
+| Content-only filter | 2.92 / 3.06 | 2.91 / 3.00 |
+| amu-mem0 gate | 3.06 / 12.63 | 3.06 / 12.58 |
+
+Tests on this branch: 55 (`tests/test_gate.py` 23, `tests/test_update.py` 15, `tests/test_revocation.py` 17).
 
 ## To capture as PDF later
 
