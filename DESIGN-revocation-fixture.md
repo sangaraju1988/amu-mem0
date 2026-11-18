@@ -14,7 +14,7 @@ make bench                                 # synthetic leak/recall/latency bench
 ```
 
 Pinned versions, as read from `uv.lock` on 2026-11-17: **mem0ai 2.2.1, amu-governance 0.1.2,
-amu-mem0 0.2.0, qdrant-client 1.20.0**. Every test runs offline. The store is a real mem0
+amu-mem0 0.2.1, qdrant-client 1.20.0**. Every test runs offline. The store is a real mem0
 `Memory` on local Qdrant and SQLite, with a deterministic hashed embedder, `infer=False`, and
 no network or LLM calls.
 

@@ -5,7 +5,7 @@ re-evaluates the requester's current entitlements, so "revocation" here is
 allow -> change entitlements -> re-read, on all three read paths.
 
 Run one case:  uv run pytest tests/test_revocation.py -k <test name>
-Pins (uv.lock): mem0ai 2.2.1, amu-governance 0.1.2, amu-mem0 0.2.0, qdrant-client 1.20.0.
+Pins (uv.lock): mem0ai 2.2.1, amu-governance 0.1.2, amu-mem0 0.2.1, qdrant-client 1.20.0.
 """
 
 import logging
