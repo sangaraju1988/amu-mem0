@@ -4,7 +4,7 @@ import pytest
 
 from amu_mem0 import METADATA_KEY, GatedMemory, IndexScanLimitError
 
-from .conftest import SCOPE, add_id
+from .conftest import SCOPE, add_id, ids
 
 HR = {"hr.salary"}
 MKT = {"mkt.campaign"}
@@ -149,3 +149,82 @@ def test_restrict_source_reaches_descendants_written_before_the_source(gm):
     res = gm.restrict_source("hris", ["hr.salary"])
     assert c in res.updated
     assert gm.get(c, entitlements=MKT) is None
+
+
+# ------------------------------------------- update() tightening cascades to descendants
+
+
+def _visible(gm, mid, query, entitlements):
+    """(search, get, get_all) visibility of ``mid`` for one requester."""
+    return (
+        mid in ids(gm.search(query, filters=SCOPE, entitlements=entitlements, top_k=20)),
+        gm.get(mid, entitlements=entitlements) is not None,
+        mid in ids(gm.get_all(filters=SCOPE, entitlements=entitlements, top_k=100)),
+    )
+
+
+ALL = (True, True, True)
+NONE = (False, False, False)
+
+
+def _family(gm, source):
+    """P from an unrestricted ``source``; C derived from P and an unrestricted public memory."""
+    p = add_id(gm, f"spend outlook from {source}", sources={source: []})
+    pub = add_id(gm, f"quarter calendar for {source}", sources={"calendar": []})
+    c = add_id(gm, f"spend outlook summary for {source}", derived_from=[p, pub])
+    return p, pub, c
+
+
+def test_update_tightening_denies_descendants(gm):
+    p, pub, c = _family(gm, "hris")
+    query = "spend outlook summary for hris"
+    assert _visible(gm, c, query, MKT) == ALL  # readable before the parent is tightened
+    gm.update(p, sources={"hris": ["hr.salary"]})  # P gains a restriction AFTER C was written
+    assert _visible(gm, c, query, MKT) == NONE
+    assert _visible(gm, c, query, HR) == ALL  # denied by lineage, not a lockout
+    assert _visible(gm, pub, "quarter calendar for hris", MKT) == ALL
+    assert _amu(gm, c)["closed"]["hris"] == ["hr.salary"]
+
+
+def test_update_restrict_source_parity(gm):
+    # Two identical families; one parent tightened by update(), the other by restrict_source().
+    pa, _, ca = _family(gm, "hris_a")
+    pb, _, cb = _family(gm, "hris_b")
+    gm.update(pa, sources={"hris_a": ["hr.salary"]})
+    gm.restrict_source("hris_b", ["hr.salary"])
+    for who in (MKT, HR):
+        assert _visible(gm, ca, "spend outlook summary for hris_a", who) == _visible(
+            gm, cb, "spend outlook summary for hris_b", who
+        )
+    assert _visible(gm, ca, "spend outlook summary for hris_a", MKT) == NONE
+    assert _amu(gm, ca)["closed"]["hris_a"] == _amu(gm, cb)["closed"]["hris_b"] == ["hr.salary"]
+
+
+def test_update_without_tightening_leaves_descendants_readable(gm):
+    p, _, c = _family(gm, "hris")
+    before = _amu(gm, c)
+    gm.update(p, "spend outlook, revised", sources={})  # text-only: no new labels
+    gm.update(p, sources={"hris": []})  # re-declares an existing source: no new labels
+    assert _visible(gm, c, "spend outlook summary for hris", MKT) == ALL
+    assert _amu(gm, c) == before  # descendant not rewritten
+
+
+def test_update_tightening_reaches_grandchildren_but_not_unrelated_memories(gm):
+    p, _, c = _family(gm, "hris")
+    g = add_id(gm, "spend outlook briefing", derived_from=[c])
+    other = add_id(gm, "hris headcount export", sources={"hris": []})  # same source, not derived from p
+    gm.update(p, sources={"hris": ["hr.salary"]})
+    for mid in (c, g):
+        assert gm.get(mid, entitlements=MKT) is None
+    # Collection-wide restriction of a source stays restrict_source()'s job.
+    assert gm.get(other, entitlements=MKT) is not None
+    assert _amu(gm, other)["closed"] == {"hris": []}
+
+
+def test_update_tightening_refuses_over_partial_index_and_writes_nothing(memory):
+    gm = GatedMemory(memory, max_index_scan=2)
+    p, _, c = _family(gm, "hris")
+    before_p, before_c = _amu(gm, p), _amu(gm, c)
+    with pytest.raises(IndexScanLimitError):
+        gm.update(p, sources={"hris": ["hr.salary"]})
+    assert (_amu(gm, p), _amu(gm, c)) == (before_p, before_c)

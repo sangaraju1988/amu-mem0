@@ -82,11 +82,18 @@ class _LineageIndex:
             self.by_parent[pid].discard(memory_id)
 
     def dependents(self, source: str) -> list[str]:
-        """Every memory whose closed lineage names ``source``, plus all their descendants.
-        Breadth-first with a visited set, so ``derived_from`` cycles terminate."""
+        """Every memory whose closed lineage names ``source``, plus all their descendants."""
+        return self._walk(sorted(self.by_source.get(source, ())))
+
+    def descendants(self, memory_id: str) -> list[str]:
+        """Every memory derived, directly or transitively, from ``memory_id`` (excluding itself)."""
+        return [m for m in self._walk(sorted(self.by_parent.get(memory_id, ()))) if m != memory_id]
+
+    def _walk(self, start: list[str]) -> list[str]:
+        """Breadth-first over child edges with a visited set, so ``derived_from`` cycles terminate."""
         order: list[str] = []
         seen: set[str] = set()
-        queue = deque(sorted(self.by_source.get(source, ())))
+        queue = deque(start)
         while queue:
             mid = queue.popleft()
             if mid in seen:
@@ -138,7 +145,7 @@ class GatedMemory:
             filtered-out items do not starve ``top_k``.
         max_fetch: upper bound on how many candidates one gated read requests
             from mem0.
-        max_index_scan: upper bound on how many memories ``restrict_source`` may
+        max_index_scan: upper bound on how many memories ``restrict_source`` (or a tightening ``update``) may
             scan to build its reverse index. Exceeding it raises
             ``IndexScanLimitError`` instead of cascading over a partial index.
     """
@@ -244,8 +251,18 @@ class GatedMemory:
         The stored lineage becomes existing ∪ declared: labels are never removed.
         Replacing ``text`` without declaring ``sources`` or ``derived_from`` marks the
         lineage incomplete, as ``add()`` does for undeclared memories; pass
-        ``sources={}`` to declare "no restricted inputs". Existing children are not
-        rewritten; use ``restrict_source()`` to push a restriction to descendants.
+        ``sources={}`` to declare "no restricted inputs".
+
+        If the update tightens the memory, i.e. adds labels to its closed lineage that
+        were not there before, those labels are pushed to every descendant (via
+        ``derived_from``, cycle-safe) with the same rewrite ``restrict_source()`` uses,
+        so a child written before the update ends up with the closure it would have had
+        if written after it. Updates that add no labels leave descendants untouched.
+        The cascade needs the reverse index (see ``restrict_source()``); if it cannot be
+        built within ``max_index_scan``, ``IndexScanLimitError`` is raised before
+        anything is written. Memories that merely share a source name and are not
+        derived from this one are not touched: ``restrict_source()`` remains the way to
+        restrict a source across the whole collection.
         """
         if metadata and METADATA_KEY in metadata:
             raise ValueError(f"metadata key {METADATA_KEY!r} is reserved for lineage")
@@ -281,13 +298,25 @@ class GatedMemory:
             complete=not problems,
             incomplete_reason="; ".join(dict.fromkeys(problems)) or None,
         )
+        tightened = _added_labels(base.closed, record.closed)
+        # Build the index before writing anything, so a scan-limit failure leaves the store unchanged.
+        index = self._ensure_index() if tightened else self._index
         merged = dict(metadata or {})
         merged[METADATA_KEY] = record.to_metadata()
         result = self._memory.update(memory_id, text=text, metadata=merged, **kwargs)
         if not record.complete:
             logger.info("amu_mem0 update id=%s stored with incomplete lineage", memory_id)
-        if self._index is not None:
-            self._index.put(str(memory_id), record)
+        if index is not None:
+            index.put(str(memory_id), record)
+        if tightened and index is not None:
+            updated, skipped = self._push_labels(index, index.descendants(str(memory_id)), tightened, direct=False)
+            logger.info(
+                "amu_mem0 update id=%s tightened sources=%s descendants updated=%d skipped=%d",
+                memory_id,
+                ",".join(tightened),
+                len(updated),
+                len(skipped),
+            )
         return result
 
     # ----------------------------------------------------------- restriction
@@ -313,9 +342,33 @@ class GatedMemory:
             raise ValueError("labels must not be empty")
 
         index = self._ensure_index()
+        updated, skipped = self._push_labels(index, index.dependents(source), {source: new_labels}, direct=True)
+        logger.info(
+            "amu_mem0 restrict_source source=%s labels=%s updated=%d skipped=%d",
+            source,
+            ",".join(new_labels),
+            len(updated),
+            len(skipped),
+        )
+        return RestrictionResult(source, new_labels, tuple(updated), tuple(skipped))
+
+    def _push_labels(
+        self,
+        index: _LineageIndex,
+        targets: Iterable[str],
+        add: Mapping[str, tuple[str, ...]],
+        *,
+        direct: bool,
+    ) -> tuple[list[str], list[str]]:
+        """Add ``add`` (source -> labels) to each target's closed lineage; labels are only ever added.
+
+        With ``direct=True`` a target that names one of the sources directly gets the labels in its
+        ``sources`` too (``restrict_source``). Used by ``restrict_source()`` and by a tightening
+        ``update()``. Returns (updated ids, skipped ids).
+        """
         updated: list[str] = []
         skipped: list[str] = []
-        for mid in index.dependents(source):
+        for mid in targets:
             item = self._memory.get(mid)
             if item is None:
                 skipped.append(mid)  # deleted; its children were still walked
@@ -327,9 +380,9 @@ class GatedMemory:
             if rec is None:
                 skipped.append(mid)  # already denied by default
                 continue
-            add = {source: new_labels}
+            own = {src: labels for src, labels in add.items() if src in rec.sources} if direct else {}
             new_rec = LineageRecord(
-                sources=merge_closed(rec.sources, add) if source in rec.sources else rec.sources,
+                sources=merge_closed(rec.sources, own) if own else rec.sources,
                 derived_from=rec.derived_from,
                 closed=merge_closed(rec.closed, add),
                 complete=rec.complete,
@@ -338,14 +391,7 @@ class GatedMemory:
             self._memory.update(mid, metadata={METADATA_KEY: new_rec.to_metadata()})
             index.put(mid, new_rec)
             updated.append(mid)
-        logger.info(
-            "amu_mem0 restrict_source source=%s labels=%s updated=%d skipped=%d",
-            source,
-            ",".join(new_labels),
-            len(updated),
-            len(skipped),
-        )
-        return RestrictionResult(source, new_labels, tuple(updated), tuple(skipped))
+        return updated, skipped
 
     def _ensure_index(self) -> _LineageIndex:
         if self._index is not None:
@@ -539,6 +585,16 @@ class GatedMemory:
         if self._index is not None:
             self._index.remove(str(memory_id))
         return result
+
+
+def _added_labels(old: Mapping[str, Iterable[str]], new: Mapping[str, Iterable[str]]) -> dict[str, tuple[str, ...]]:
+    """Per source, the labels in ``new`` that ``old`` did not have. Empty if nothing was added."""
+    out: dict[str, tuple[str, ...]] = {}
+    for src, labels in new.items():
+        added = set(labels) - set(old.get(src, ()))
+        if added:
+            out[src] = tuple(sorted(added))
+    return out
 
 
 def _dedupe_ids(ids: Iterable[str] | None) -> tuple[str, ...]:
