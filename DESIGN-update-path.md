@@ -61,9 +61,32 @@ Rules:
    through and merged by mem0.
 8. `infer` is not involved: `Memory.update` has no LLM step.
 9. A missing `memory_id` raises `ValueError`.
-10. Updating a memory does **not** rewrite its existing children. They were derived from the
-    previous content, which the new sources did not contribute to. To push a restriction to
-    descendants, use `restrict_source()`.
+10. **A tightening update cascades to descendants (recompute).** Let *delta* be the labels in
+    the new closed lineage that were not in the old one. If *delta* is non-empty, the update
+    pushes it to every descendant of the memory (breadth-first over `derived_from` edges in the
+    reverse index, with a visited set, so cycles terminate). It uses the same rewrite as
+    `restrict_source()` (the shared `_push_labels` helper), so labels are only ever added and
+    each descendant's stored closure becomes what it would have been if the child had been
+    written after the update. If *delta* is empty (a text-only update, or one that re-declares
+    labels the memory already had), no descendant is rewritten.
+    - The reverse index is built **before** anything is written. If it cannot be built within
+      `max_index_scan`, `IndexScanLimitError` is raised and neither the memory nor its
+      descendants change.
+    - Memories that only share a source name with the updated memory, and are not derived from
+      it, are not touched. `restrict_source()` remains the way to restrict a source across the
+      whole collection.
+    - Why recompute rather than "deny until repaired": there is no repair API, so marking
+      descendants denied would leave stale lineage in place with no way back. Recompute reuses
+      the existing cascade and makes `update()` and `restrict_source()` agree by construction.
+    - Before this change (through `7a04e7f`), `update()` rewrote only the target's own record. A
+      child written before its parent gained a restriction through `update()` stayed readable,
+      while the same restriction applied through `restrict_source()` denied it. Huzaifa Asim
+      raised this on mem0 Discussion #7390 (2026-11-23).
+    - Regression tests (`tests/test_update.py`): `test_update_tightening_denies_descendants`
+      (search, get, get_all), `test_update_restrict_source_parity`,
+      `test_update_without_tightening_leaves_descendants_readable`,
+      `test_update_tightening_reaches_grandchildren_but_not_unrelated_memories`,
+      `test_update_tightening_refuses_over_partial_index_and_writes_nothing`.
 
 ## 2. Reverse index
 
@@ -72,7 +95,7 @@ An in-memory, per-`GatedMemory` index with two maps:
 - `by_source: source -> set[memory_id]`, for every memory whose **closed** lineage names `source`;
 - `by_parent: parent_id -> set[child_id]`, from each memory's `derived_from`.
 
-**Built lazily** on the first `restrict_source()` by scanning the whole collection with
+**Built lazily** on the first `restrict_source()` or tightening `update()` by scanning the whole collection with
 `memory.vector_store.list(filters=None, top_k=max_index_scan + 1)`. The scan cannot use
 `Memory.get_all`, because that requires a `user_id`/`agent_id`/`run_id` filter, and a source
 restriction must reach every scope. **Bound:** `max_index_scan` (new optional constructor

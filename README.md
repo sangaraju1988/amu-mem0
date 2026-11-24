@@ -116,8 +116,11 @@ memory.get(mid, entitlements={"mkt.campaign"})  # None: the rewrite carries hr.s
 
 Replacing the text without declaring where it came from marks the lineage
 incomplete, so the memory is hidden by default (as with `add()`). Pass
-`sources={}` to declare "no restricted inputs". Updating a memory does not
-rewrite its existing children: they were derived from the previous content.
+`sources={}` to declare "no restricted inputs". If an update adds labels to the
+memory's lineage (a tightening), those labels cascade to all of its descendants,
+the same way `restrict_source()` does, so a child written before the update is
+denied just as if it had been written after it. Updates that add no labels
+leave descendants untouched.
 
 **`restrict_source(source, labels)`** adds labels to a source and cascades them
 to every memory whose lineage names it, and to all of their descendants:
@@ -252,10 +255,11 @@ entitlements and to declare lineage truthfully.
 - **`infer=True` is unsupported** for gated data (see above).
 - **Only the sync OSS `Memory` is supported.** `AsyncMemory` and the hosted
   `MemoryClient` are not wrapped or tested.
-- **Updates don't propagate on their own.** A child's closure is computed when
-  the child is written. `GatedMemory.update()` on a parent does not rewrite its
-  children; `restrict_source()` does, for the source you name. Deleting a
-  parent leaves children with their recorded closure.
+- **Only gated writes propagate.** A child's closure is computed when the child
+  is written. A tightening `GatedMemory.update()` on a parent, and
+  `restrict_source()` for the source you name, push new labels to descendants.
+  Direct `gm.memory.update()` calls do not. Deleting a parent leaves children
+  with their recorded closure.
 - **The reverse index is in memory only.** It is rebuilt by a full, bounded
   scan per `GatedMemory` instance, it is not locked for concurrent writers, and
   it does not see writes made outside this instance.

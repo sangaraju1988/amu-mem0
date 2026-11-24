@@ -14,6 +14,7 @@ All times UTC. Each entry links to a public, timestamped record.
 | 2026-11-15T05:16:22Z | Tag `v0.1.0` (commit `e33911d`) and GitHub Release | https://github.com/sangaraju1988/amu-mem0/releases/tag/v0.1.0 |
 | 2026-11-15T05:16:43Z | PyPI release 0.1.0 (wheel + sdist); verified by clean install + quickstart | https://pypi.org/project/amu-mem0/0.1.0/ (run https://github.com/sangaraju1988/amu-mem0/actions/runs/43680359990) |
 | 2026-11-16T14:24:37Z | Branch `fix/update-path-gate` (0.2.0, not merged or released): gated `update()` with monotonic lineage, `restrict_source()` cascade with reverse index; 38 tests (23 + 15 new); bench re-run at `2a7fb47` | https://github.com/sangaraju1988/amu-mem0/tree/fix/update-path-gate |
+| 2026-11-24 | Branch `fix/update-path-gate` (still 0.2.0, not merged or released): a tightening `GatedMemory.update()` now cascades the new labels to descendants (recompute, same rewrite as `restrict_source()`), closing the stale-closure gap raised on mem0 Discussion #7390; 43 tests (38 + 5 new); bench re-run at `a538584` | https://github.com/sangaraju1988/amu-mem0/commit/a538584 |
 
 ## Status
 
@@ -43,6 +44,29 @@ cost of `update()` / `restrict_source()` is not measured.
 | Plain mem0 | 2.05 / 2.18 | 2.02 / 2.08 |
 | Content-only filter | 2.91 / 3.03 | 2.87 / 2.97 |
 | amu-mem0 gate | 3.07 / 12.57 | 3.02 / 12.45 |
+
+### Update-cascade re-run (branch `fix/update-path-gate`, commit `a538584`, 2026-11-24T03:35:00Z)
+
+Same synthetic setup and seed. Compared with the `2a7fb47` run, the only changed fields in
+`bench.json` are latencies and `meta` (gate 0 / 2164 leaked, recall@10 0.999, sweep unchanged).
+The benchmark exercises `add` and `search` only; the write-path cost of the tightening cascade is
+not measured.
+
+Closed gap: before `a538584`, `GatedMemory.update()` rewrote only the target memory's own lineage, so
+a child written before its parent gained a restriction through `update()` stayed readable, while the
+same restriction through `restrict_source()` denied it. A tightening `update()` (one that adds labels to
+the closed lineage) now pushes those labels to every descendant through the same rewrite
+`restrict_source()` uses. Regression test: `test_update_tightening_denies_descendants`, which checks
+search, get and get_all; parity is pinned by `test_update_restrict_source_parity`, and no false denial by
+`test_update_without_tightening_leaves_descendants_readable`. Direct `gm.memory.update()` stays ungated
+(`test_direct_mem0_update_is_still_ungated`). Raised by Huzaifa Asim on mem0 Discussion #7390
+(2026-11-23); he has not run the fixture or verified these results.
+
+| Condition | p50 / p95 ms, `2a7fb47` | p50 / p95 ms, `a538584` |
+|---|---|---|
+| Plain mem0 | 2.02 / 2.08 | 2.05 / 2.15 |
+| Content-only filter | 2.87 / 2.97 | 2.91 / 3.05 |
+| amu-mem0 gate | 3.02 / 12.45 | 3.06 / 12.68 |
 
 ## To capture as PDF later
 
